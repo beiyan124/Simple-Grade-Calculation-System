@@ -7,6 +7,7 @@
 
 import pandas as pd
 import numpy as np
+import re
 from typing import Tuple, Dict, Any, List, Optional
 
 def calculate(df: pd.DataFrame, params: Dict[str, Any],
@@ -31,11 +32,12 @@ def calculate(df: pd.DataFrame, params: Dict[str, Any],
         calc_progress: 是否计算进退步
 
     返回:
-        (student_rank_df, class_summary_df, subject_details_dict)
+        (student_rank_df, class_summary_df, subject_details_dict, class_order)
         student_rank_df: 学生排名表，包含总分、年级排名、班级排名、
                          语数英总分、语数英排名、上次排名、进退步（如果启用）
         class_summary_df: 班级汇总表（含总分分数段）
         subject_details_dict: 各科目班级详细统计表
+        class_order: 班级顺序列表，用于表格排序
     """
     # 复制数据，避免修改原始
     df = df.copy()
@@ -65,9 +67,9 @@ def calculate(df: pd.DataFrame, params: Dict[str, Any],
         subjects_with_total = subjects + ['总分']
         # 更新满分线字典，添加总分满分线
         full_marks['总分'] = total_full_mark
-        # 总分没有优生线和及格线
-        passing['总分'] = 0
-        excellent['总分'] = 0
+        # 计算总分及格线和优生线
+        passing['总分'] = total_full_mark * 0.6
+        excellent['总分'] = total_full_mark * 0.85
     else:
         subjects_with_total = subjects
 
@@ -144,14 +146,51 @@ def calculate(df: pd.DataFrame, params: Dict[str, Any],
     # ------------------------------------------------------------------
     if calc_progress and history_df is not None and not history_df.empty:
         # 合并历史排名
-        history_df_clean = history_df[['姓名', '上次排名']].copy()
-        history_df_clean['姓名'] = history_df_clean['姓名'].astype(str).str.strip()
-        df['姓名_clean'] = df['姓名'].astype(str).str.strip()
-        df = df.merge(history_df_clean, left_on='姓名_clean', right_on='姓名', how='left', suffixes=('', '_hist'))
-        # 删除多余列
-        df.drop(columns=['姓名_clean', '姓名_hist'], inplace=True, errors='ignore')
+        # 检查历史数据中是否包含座号列
+        if '座号' in history_df.columns:
+            # 如果历史数据包含座号列，则使用姓名和座号的组合进行匹配
+            history_df_clean = history_df[['姓名', '座号', '上次排名']].copy()
+            history_df_clean['姓名'] = history_df_clean['姓名'].astype(str).str.strip()
+            history_df_clean['座号'] = pd.to_numeric(history_df_clean['座号'], errors='coerce')
+            
+            # 处理历史数据中的重复记录：保留每个姓名和座号组合的第一条记录
+            history_df_clean = history_df_clean.drop_duplicates(subset=['姓名', '座号'], keep='first')
+            
+            # 确保当前数据中没有重复的学生记录
+            # 根据姓名和座号组合去重，保留第一条记录
+            df = df.drop_duplicates(subset=['姓名', '座号'], keep='first')
+            
+            # 准备匹配列
+            df['姓名_clean'] = df['姓名'].astype(str).str.strip()
+            df['座号_clean'] = pd.to_numeric(df['座号'], errors='coerce')
+            
+            # 使用姓名和座号的组合进行合并
+            df = df.merge(history_df_clean, left_on=['姓名_clean', '座号_clean'], right_on=['姓名', '座号'], how='left', suffixes=('', '_hist'))
+            # 删除多余列
+            df.drop(columns=['姓名_clean', '座号_clean', '姓名_hist', '座号_hist'], inplace=True, errors='ignore')
+        else:
+            # 如果历史数据不包含座号列，则回退到只使用姓名进行匹配
+            history_df_clean = history_df[['姓名', '上次排名']].copy()
+            history_df_clean['姓名'] = history_df_clean['姓名'].astype(str).str.strip()
+            
+            # 处理历史数据中的重复姓名：保留每个姓名的第一条记录
+            history_df_clean = history_df_clean.drop_duplicates(subset=['姓名'], keep='first')
+            
+            # 确保当前数据中没有重复的学生记录
+            # 根据姓名和班级组合去重，保留第一条记录
+            df = df.drop_duplicates(subset=['姓名', '班级'], keep='first')
+            
+            df['姓名_clean'] = df['姓名'].astype(str).str.strip()
+            df = df.merge(history_df_clean, left_on='姓名_clean', right_on='姓名', how='left', suffixes=('', '_hist'))
+            # 删除多余列
+            df.drop(columns=['姓名_clean', '姓名_hist'], inplace=True, errors='ignore')
+        
+        # 确保上次排名是有效的数值
+        df['上次排名'] = pd.to_numeric(df['上次排名'], errors='coerce')
+        
         # 计算进退步：本次排名 - 上次排名（负数表示进步）
-        df['进退步'] = df['年级排名'] - df['上次排名']
+        # 只对有效的年级排名和上次排名计算进退步
+        df['进退步'] = df.apply(lambda row: row['年级排名'] - row['上次排名'] if pd.notna(row['年级排名']) and pd.notna(row['上次排名']) else pd.NA, axis=1)
     else:
         df['上次排名'] = pd.NA
         df['进退步'] = pd.NA
@@ -275,7 +314,31 @@ def calculate(df: pd.DataFrame, params: Dict[str, Any],
         student_rank_df = student_rank_df.sort_values('总分', ascending=False, na_position='last')
 
     # ------------------------------------------------------------------
-    # 9. 添加年段行到班级汇总表和单科排名表
+    # 9. 调整学生排名表列顺序
+    # ------------------------------------------------------------------
+    # 基本列（班级、座号、姓名）
+    base_columns = ['班级']
+    # 检查是否存在座号列
+    if '座号' in student_rank_df.columns:
+        base_columns.append('座号')
+    base_columns.append('姓名')
+    # 科目列
+    subject_columns = [subj for subj in params['subjects'] if subj in student_rank_df.columns]
+    # 总分相关列
+    total_columns = ['总分', '年级排名', '班级排名'] if calc_total else []
+    # 其他列（上次排名、进退步）
+    other_columns = ['上次排名', '进退步'] if '上次排名' in student_rank_df.columns else []
+    # 语数英相关列
+    ysy_columns = ['语数英总分', '语数英排名'] if '语数英总分' in student_rank_df.columns else []
+    # 其他可能存在的列
+    remaining_columns = [col for col in student_rank_df.columns 
+                        if col not in base_columns + subject_columns + total_columns + other_columns + ysy_columns]
+    # 重新排序列
+    new_column_order = base_columns + subject_columns + total_columns + other_columns + remaining_columns + ysy_columns
+    student_rank_df = student_rank_df[new_column_order]
+
+    # ------------------------------------------------------------------
+    # 10. 添加年段行到班级汇总表和单科排名表
     # ------------------------------------------------------------------
     # 班级汇总表年段行
     grade_row = {'班级': '年段'}
@@ -302,7 +365,19 @@ def calculate(df: pd.DataFrame, params: Dict[str, Any],
         grade_row_subj = _calculate_grade_subject_details(df, subj, params)
         subject_details_dict[subj] = pd.concat([df_subj, pd.DataFrame([grade_row_subj])], ignore_index=True)
 
-    return student_rank_df, class_summary_df, subject_details_dict
+    class_order = _sort_classes_numerically(df['班级'].unique())
+
+    return student_rank_df, class_summary_df, subject_details_dict, class_order
+
+def _sort_classes_numerically(classes):
+    """按照班级名称中的数字顺序排序班级"""
+    def get_class_number(cls):
+        match = re.search(r'(\d+)', str(cls))
+        if match:
+            return int(match.group(1))
+        return 999999
+    
+    return sorted(classes, key=get_class_number)
 
 def _calculate_subject_class_details(df: pd.DataFrame, subject: str, params: Dict[str, Any]) -> pd.DataFrame:
     """计算单个科目的班级详细统计表（含分数段分布）"""

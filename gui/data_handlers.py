@@ -124,12 +124,12 @@ def build_subject_inputs(app):
         full_mark = subj_default.get('满分', config.DEFAULT_THRESHOLDS.get('满分', 100))
         app.threshold_table.setItem(row, 1, QTableWidgetItem(str(full_mark)))
         
-        # 获取及格线值
-        pass_mark = subj_default.get('及格线', config.DEFAULT_THRESHOLDS.get('及格线', 60))
+        # 计算及格线值（满分*0.6）
+        pass_mark = full_mark * 0.6
         app.threshold_table.setItem(row, 2, QTableWidgetItem(str(pass_mark)))
         
-        # 获取优秀线值
-        excellent_mark = subj_default.get('优秀线', config.DEFAULT_THRESHOLDS.get('优秀线', 85))
+        # 计算优秀线值（满分*0.85）
+        excellent_mark = full_mark * 0.85
         app.threshold_table.setItem(row, 3, QTableWidgetItem(str(excellent_mark)))
     
     # 更新参数

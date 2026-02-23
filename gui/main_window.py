@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QCheckBox, QLineEdit, QComboBox, QTextEdit,
     QTableWidget, QTableWidgetItem, QTabWidget, QFrame, QSplitter,
-    QFileDialog, QMessageBox, QScrollArea, QHeaderView
+    QFileDialog, QMessageBox, QScrollArea, QHeaderView, QProgressBar
 )
 from PyQt5.QtCore import Qt, QSize, QEvent
 from PyQt5.QtGui import QFont, QColor, QPalette, QBrush, QIcon
@@ -50,6 +50,7 @@ class GradeAnalyzerApp(QMainWindow):
         self.subject_rankings: Dict[str, pd.DataFrame] = {}
         self.teachers_df: Optional[pd.DataFrame] = None
         self.params: Dict[str, Any] = self._get_default_params()
+        self.class_order: List[str] = []
         
         # 界面控件变量
         self.subject_vars: Dict[str, Dict[str, str]] = {}
@@ -72,6 +73,9 @@ class GradeAnalyzerApp(QMainWindow):
         # 教师配置页面控件
         self.threshold_table: Optional[QTableWidget] = None
         self.teacher_table: Optional[QTableWidget] = None
+        
+        # 进度条
+        self.progress_bar: Optional[QProgressBar] = None
         
         # 构建界面
         self._setup_ui()
@@ -112,6 +116,14 @@ class GradeAnalyzerApp(QMainWindow):
         # 创建主面板
         self._create_main_panel(main_layout)
         
+        # 创建进度条
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMinimum(0)
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        main_layout.addWidget(self.progress_bar)
+        
         # 创建状态栏
         self.statusBar().showMessage("就绪")
     
@@ -121,10 +133,10 @@ class GradeAnalyzerApp(QMainWindow):
         
         # 文件菜单
         file_menu = menubar.addMenu("文件")
-        import_action = file_menu.addAction("导入文件")
-        import_action.triggered.connect(self.load_files)
-        import_action.setShortcut("Ctrl+O")
-        
+        import_class_action = file_menu.addAction("从班级导入")
+        import_class_action.triggered.connect(lambda: self._import_grade_file(use_class_file=True))
+        import_total_action = file_menu.addAction("从总表导入")
+        import_total_action.triggered.connect(lambda: self._import_grade_file(use_class_file=False))
         file_menu.addSeparator()
         exit_action = file_menu.addAction("退出")
         exit_action.triggered.connect(self.close)
@@ -133,15 +145,23 @@ class GradeAnalyzerApp(QMainWindow):
         help_menu = menubar.addMenu("帮助")
         about_action = help_menu.addAction("关于")
         about_action.triggered.connect(self._show_about)
+        
+        # 添加项目地址菜单项
+        project_action = help_menu.addAction("项目地址")
+        project_action.triggered.connect(self._open_project_url)
     
     def _create_toolbar(self):
         """创建工具栏"""
         toolbar = self.addToolBar("工具栏")
         toolbar.setMovable(False)
         
-        import_btn = QPushButton("导入文件")
+        import_btn = QPushButton("从班级导入")
         import_btn.clicked.connect(self.load_files)
         toolbar.addWidget(import_btn)
+        
+        import_total_btn = QPushButton("从总表导入")
+        import_total_btn.clicked.connect(self.load_total_file)
+        toolbar.addWidget(import_total_btn)
         
         calc_btn = QPushButton("计算")
         calc_btn.clicked.connect(self.apply_params_and_calculate)
@@ -257,52 +277,15 @@ class GradeAnalyzerApp(QMainWindow):
         parent_layout.addWidget(progress_group)
         
         # 4. 考试设置
-        exam_group = QFrame()
-        exam_group.setFrameShape(QFrame.StyledPanel)
-        exam_group.setFrameShadow(QFrame.Raised)
-        exam_layout = QVBoxLayout(exam_group)
-        
-        exam_title = QLabel("考试设置")
-        exam_title.setFont(QFont('Arial', 10, QFont.Bold))
-        exam_layout.addWidget(exam_title)
-        
-        # 考试名称
-        exam_name_layout = QHBoxLayout()
-        exam_name_label = QLabel("考试名称：")
-        exam_name_label.setFixedWidth(80)
-        self.exam_name_entry = QLineEdit()
-        exam_name_layout.addWidget(exam_name_label)
-        exam_name_layout.addWidget(self.exam_name_entry)
-        exam_layout.addLayout(exam_name_layout)
-        
-        # 考试时间日期
-        exam_date_layout = QHBoxLayout()
-        exam_date_label = QLabel("考试时间：")
-        exam_date_label.setFixedWidth(80)
-        self.exam_date_entry = QLineEdit()
-        self.exam_date_entry.setPlaceholderText("YYYY-MM-DD")
-        exam_date_layout.addWidget(exam_date_label)
-        exam_date_layout.addWidget(self.exam_date_entry)
-        exam_layout.addLayout(exam_date_layout)
-        
-        # 出卷人
-        exam_author_layout = QHBoxLayout()
-        exam_author_label = QLabel("出卷人：")
-        exam_author_label.setFixedWidth(80)
-        self.exam_author_entry = QLineEdit()
-        exam_author_layout.addWidget(exam_author_label)
-        exam_author_layout.addWidget(self.exam_author_entry)
-        exam_layout.addLayout(exam_author_layout)
-        
-        parent_layout.addWidget(exam_group)
+
         
         # 5. 操作按钮
         btn_frame2 = QWidget()
         btn_layout2 = QHBoxLayout(btn_frame2)
         
-        reset_btn = QPushButton("重置为默认")
-        reset_btn.clicked.connect(self._reset_params)
-        btn_layout2.addWidget(reset_btn)
+        clear_btn = QPushButton("清除内存数据")
+        clear_btn.clicked.connect(self._clear_memory_data)
+        btn_layout2.addWidget(clear_btn)
         
         parent_layout.addWidget(btn_frame2)
         
@@ -373,6 +356,27 @@ class GradeAnalyzerApp(QMainWindow):
         ranking_layout.addWidget(self.ranking_table)
         
         self.notebook.addTab(self.ranking_frame, "单科班级排名")
+        
+        # 班级详情页
+        self.class_detail_frame = QWidget()
+        class_detail_layout = QVBoxLayout(self.class_detail_frame)
+        
+        top_frame3 = QWidget()
+        top_layout3 = QHBoxLayout(top_frame3)
+        
+        class_detail_label = QLabel("选择班级：")
+        top_layout3.addWidget(class_detail_label)
+        
+        self.class_detail_combobox = QComboBox()
+        self.class_detail_combobox.currentTextChanged.connect(self._on_class_detail_selected)
+        top_layout3.addWidget(self.class_detail_combobox)
+        
+        class_detail_layout.addWidget(top_frame3)
+        
+        self.class_detail_table = create_table()
+        class_detail_layout.addWidget(self.class_detail_table)
+        
+        self.notebook.addTab(self.class_detail_frame, "班级详情")
         
         # 使用说明页
         self.help_frame = QWidget()
@@ -454,26 +458,26 @@ class GradeAnalyzerApp(QMainWindow):
     
 
     
-    def _reset_params(self):
-        """重置参数为默认值"""
+    def _clear_memory_data(self):
+        """清除内存数据"""
+        # 重置参数
         self.rank_combo.setCurrentText(config.DEFAULT_RANK_METHOD)
         self.exclude_missing_checkbox.setChecked(config.DEFAULT_EXCLUDE_MISSING)
         self.progress_checkbox.setChecked(False)
+        
+        # 清除历史数据
         self.history_df = None
         self.history_label.setText("未导入历史文件")
         
-        # 重置考试设置
-        if hasattr(self, 'exam_name_entry'):
-            self.exam_name_entry.clear()
-        if hasattr(self, 'exam_date_entry'):
-            self.exam_date_entry.clear()
-        if hasattr(self, 'exam_author_entry'):
-            self.exam_author_entry.clear()
-        
+        # 重置核心数据
         self.params = self._get_default_params()
-        self.subject_details.clear()
-        self.subject_rankings.clear()
-        self.teachers_df = None
+        self.raw_data = None  # 清除原始数据
+        self.student_rank = None  # 清除学生排名
+        self.class_summary = None  # 清除班级汇总
+        self.subject_details.clear()  # 清除科目详情
+        self.subject_rankings.clear()  # 清除科目排名
+        self.teachers_df = None  # 清除教师数据
+        self.class_order = []  # 清除班级顺序
         
         # 清空下拉框
         if self.subject_combobox:
@@ -482,6 +486,8 @@ class GradeAnalyzerApp(QMainWindow):
         if self.ranking_combobox:
             self.ranking_combobox.clear()
             self.ranking_subject_var = ""
+        if hasattr(self, 'class_detail_combobox'):
+            self.class_detail_combobox.clear()
         
         # 清空表格
         for table in [self.student_table, self.class_table, self.subject_table, 
@@ -490,11 +496,16 @@ class GradeAnalyzerApp(QMainWindow):
                 table.setRowCount(0)
                 table.setColumnCount(0)
         
-        # 重新构建科目输入
-        if self.raw_data is not None:
-            self._refresh_teacher_table()
+        # 清空班级详细表格
+        if hasattr(self, 'class_detail_table') and self.class_detail_table:
+            self.class_detail_table.setRowCount(0)
+            self.class_detail_table.setColumnCount(0)
         
-        self.statusBar().showMessage("参数已重置")
+        # 清空教师表格
+        self._refresh_teacher_table()
+        
+        # 清空表头
+        self.statusBar().showMessage("内存数据已清除")
     
     def _build_subject_inputs(self):
         """根据导入的数据构建科目输入控件"""
@@ -513,16 +524,26 @@ class GradeAnalyzerApp(QMainWindow):
         if not file_paths:
             return
         
-        self.statusBar().showMessage("正在加载文件...")
+        self._update_progress(0, "正在加载文件...")
         
         try:
+            total_files = len(file_paths)
+            for i, file_path in enumerate(file_paths):
+                progress = int((i + 1) / total_files * 70)  # 70% 用于加载文件
+                self._update_progress(progress, f"正在加载文件 {i+1}/{total_files}...")
+                
             self.raw_data = data_loader.load_excel_files(file_paths, {})
+            
+            self._update_progress(80, "正在构建科目输入...")
             self._build_subject_inputs()
+            
+            self._update_progress(90, "正在刷新教师表格...")
             self._refresh_teacher_table()
-            self.statusBar().showMessage(f"已加载 {len(self.raw_data)} 条学生记录")
+            
+            self._update_progress(100, f"已加载 {len(self.raw_data)} 条学生记录")
             QMessageBox.information(self, "导入成功", f"成功加载 {len(file_paths)} 个文件，共 {len(self.raw_data)} 条记录。")
         except Exception as e:
-            self.statusBar().showMessage("加载失败")
+            self._update_progress(0, "加载失败")
             QMessageBox.critical(self, "导入错误", f"加载文件时出错：\n{str(e)}")
     
     def load_history_file(self):
@@ -550,18 +571,64 @@ class GradeAnalyzerApp(QMainWindow):
             self.statusBar().showMessage("历史文件加载失败")
             QMessageBox.critical(self, "导入错误", f"加载历史文件时出错：\n{str(e)}")
     
+    def load_total_file(self):
+        """从年段总表导入数据，自动根据班级列分好班级"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择年段总表Excel文件", "", "Excel文件 (*.xlsx *.xls);;所有文件 (*.*)"
+        )
+        
+        if not file_path:
+            return
+        
+        self._update_progress(0, "正在加载总表文件...")
+        
+        try:
+            self._update_progress(30, "正在读取文件...")
+            self.raw_data = data_loader.load_total_score_file(file_path, {})
+            
+            self._update_progress(70, "正在构建科目输入...")
+            self._build_subject_inputs()
+            
+            self._update_progress(90, "正在刷新教师表格...")
+            self._refresh_teacher_table()
+            
+            self._update_progress(100, f"已加载 {len(self.raw_data)} 条学生记录")
+            QMessageBox.information(self, "导入成功", f"成功从总表导入 {len(self.raw_data)} 条记录。\n班级数量：{self.raw_data['班级'].nunique()}")
+        except Exception as e:
+            self._update_progress(0, "加载失败")
+            QMessageBox.critical(self, "导入错误", f"加载总表时出错：\n{str(e)}")
+    
     def apply_params_and_calculate(self):
         """应用参数并执行计算"""
         if self.raw_data is None:
             QMessageBox.warning(self, "无数据", "请先导入成绩文件。")
             return
         
+        self._update_progress(0, "正在准备计算...")
+        
+        # 清理之前的计算结果，释放内存
+        self.student_rank = None
+        self.class_summary = None
+        self.subject_details.clear()
+        self.subject_rankings.clear()
+        
+        # 清理班级详情表格
+        if hasattr(self, 'class_detail_table') and self.class_detail_table:
+            self.class_detail_table.setRowCount(0)
+            self.class_detail_table.setColumnCount(0)
+        
+        # 强制垃圾回收
+        import gc
+        gc.collect()
+        
         if self.teacher_table and self.teacher_table.rowCount() > 0:
+            self._update_progress(10, "正在保存教师信息...")
             self._save_teachers()
         
+        self._update_progress(20, "正在更新参数...")
         self._update_params_from_inputs()
-        self.statusBar().showMessage("正在计算...")
         
+        self._update_progress(30, "正在执行计算...")
         try:
             result = calculator.calculate(
                 self.raw_data,
@@ -570,12 +637,14 @@ class GradeAnalyzerApp(QMainWindow):
                 calc_progress=self.progress_checkbox.isChecked()
             )
             
-            if len(result) == 3:
-                self.student_rank, self.class_summary, self.subject_details = result
+            self._update_progress(50, "正在处理计算结果...")
+            if len(result) == 4:
+                self.student_rank, self.class_summary, self.subject_details, self.class_order = result
             else:
-                self.student_rank, self.class_summary = result
-                self.subject_details = {}
+                self.student_rank, self.class_summary, self.subject_details = result
+                self.class_order = []
             
+            self._update_progress(60, "正在填充教师信息...")
             head_map = self._fill_teacher_info()
             
             if head_map:
@@ -588,51 +657,88 @@ class GradeAnalyzerApp(QMainWindow):
             else:
                 self.class_summary['班主任'] = ''
             
+            if self.class_order:
+                self._update_progress(70, "正在排序表格...")
+                self._sort_tables_by_class_order()
+            
+            self._update_progress(75, "正在构建科目排名...")
             self._build_subject_rankings()
+            
+            self._update_progress(80, "正在更新学生表格...")
             self._update_student_table()
+            
+            self._update_progress(85, "正在更新班级表格...")
             self._update_class_table()
+            
+            self._update_progress(90, "正在更新下拉框...")
             self._update_subject_combobox()
             self._update_ranking_combobox()
+            # 只更新班级详情下拉框，不自动更新表格
+            if self.student_rank is not None:
+                classes = self._sort_classes_numerically(self.student_rank['班级'].unique())
+                if classes:
+                    self.class_detail_combobox.clear()
+                    self.class_detail_combobox.addItems(classes)
+                else:
+                    self.class_detail_combobox.clear()
             
-            self.statusBar().showMessage("计算完成")
+            self._update_progress(100, "计算完成")
+            
+            # 再次强制垃圾回收，释放内存
+            gc.collect()
         except Exception as e:
-            self.statusBar().showMessage("计算失败")
+            self._update_progress(0, "计算失败")
             QMessageBox.critical(self, "计算错误", f"计算过程中出错：\n{str(e)}")
+            
+            # 发生错误时清理数据，释放内存
+            self.student_rank = None
+            self.class_summary = None
+            self.subject_details.clear()
+            self.subject_rankings.clear()
+            gc.collect()
     
     def export_results(self):
         """导出计算结果到Excel文件"""
         if self.student_rank is None or self.class_summary is None:
-            QMessageBox.warning(self, "无结果", "请先计算后再导出。")
+            QMessageBox.warning(self, "无数据", "请先计算成绩")
             return
         
         file_path, _ = QFileDialog.getSaveFileName(
-            self, "保存Excel文件", "", "Excel文件 (*.xlsx);;所有文件 (*.*)"
+            self, "保存Excel文件", "年段成绩分析.xlsx", "Excel文件 (*.xlsx);;所有文件 (*.*)"
         )
         
         if not file_path:
             return
         
-        self.statusBar().showMessage("正在导出...")
+        if not file_path.endswith('.xlsx'):
+            file_path += '.xlsx'
+        
+        self._update_progress(0, "正在导出...")
         
         try:
-            # 收集考试信息
-            exam_info = {
-                '考试名称': self.exam_name_entry.text() if hasattr(self, 'exam_name_entry') else '',
-                '考试时间日期': self.exam_date_entry.text() if hasattr(self, 'exam_date_entry') else '',
-                '出卷人': self.exam_author_entry.text() if hasattr(self, 'exam_author_entry') else ''
-            }
+            self._update_progress(20, "正在准备数据...")
+            # 不再收集考试信息，已移除考试设置UI
             
+            self._update_progress(40, "正在写入Excel文件...")
             # 直接使用用户选择的文件路径，允许覆盖已存在的文件
-            
             exporter.export_to_excel(self.student_rank, self.class_summary,
-                                      self.subject_details, self.subject_rankings, file_path, exam_info=exam_info)
-            self.statusBar().showMessage(f"导出成功：{os.path.basename(file_path)}")
+                                      self.subject_details, self.subject_rankings, file_path,
+                                      passing_score=self.params.get('passing_score', {}),
+                                      excellent_score=self.params.get('excellent_score', {}))
+            
+            self._update_progress(70, "正在为分数段上色...")
+            # 此处不需要额外代码，因为染色逻辑已经集成在export_to_excel函数中
+            
+            self._update_progress(90, "正在调整格式...")
+            # 此处不需要额外代码，因为格式调整逻辑已经集成在export_to_excel函数中
+            
+            self._update_progress(100, f"导出成功：{os.path.basename(file_path)}")
             QMessageBox.information(self, "导出完成", f"结果已保存到：\n{file_path}")
         except PermissionError as e:
-            self.statusBar().showMessage("导出失败")
+            self._update_progress(0, "导出失败")
             QMessageBox.critical(self, "权限错误", f"无法写入文件，可能是因为：\n1. 没有写入目标目录的权限\n2. 文件已被其他程序打开\n3. 文件是只读的\n\n请尝试保存到其他目录。\n\n错误信息：\n{str(e)}")
         except Exception as e:
-            self.statusBar().showMessage("导出失败")
+            self._update_progress(0, "导出失败")
             QMessageBox.critical(self, "导出错误", f"导出文件时出错：\n{str(e)}")
     
     def _update_student_table(self):
@@ -677,9 +783,55 @@ class GradeAnalyzerApp(QMainWindow):
             self.subject_table.setRowCount(0)
             self.subject_table.setColumnCount(0)
     
+    def _sort_tables_by_class_order(self):
+        """按照班级顺序对班级汇总表、单科班级分析和单科班级排名进行排序"""
+        if not self.class_order:
+            return
+        
+        class_order_map = {cls: idx for idx, cls in enumerate(self.class_order)}
+        
+        def sort_key(cls):
+            cls_str = str(cls)
+            if cls_str == '年段':
+                return (1, 0)
+            return (0, class_order_map.get(cls_str, 999))
+        
+        if self.class_summary is not None and '班级' in self.class_summary.columns:
+            self.class_summary['排序键'] = self.class_summary['班级'].astype(str).apply(sort_key)
+            self.class_summary = self.class_summary.sort_values('排序键').drop(columns=['排序键']).reset_index(drop=True)
+        
+        if self.subject_details:
+            for subj in self.subject_details:
+                df = self.subject_details[subj]
+                if '班级' in df.columns:
+                    df['排序键'] = df['班级'].astype(str).apply(sort_key)
+                    self.subject_details[subj] = df.sort_values('排序键').drop(columns=['排序键']).reset_index(drop=True)
+        
+        if self.subject_rankings:
+            for subj in self.subject_rankings:
+                df = self.subject_rankings[subj]
+                if '班级' in df.columns:
+                    df['排序键'] = df['班级'].astype(str).apply(sort_key)
+                    self.subject_rankings[subj] = df.sort_values('排序键').drop(columns=['排序键']).reset_index(drop=True)
+        
+        if self.teachers_df is not None and '班级' in self.teachers_df.columns:
+            self.teachers_df['排序键'] = self.teachers_df['班级'].astype(str).apply(sort_key)
+            self.teachers_df = self.teachers_df.sort_values('排序键').drop(columns=['排序键']).reset_index(drop=True)
+            self._refresh_teacher_table()
+    
     def _build_subject_rankings(self):
         """构建单科班级排名数据"""
         self.subject_rankings.clear()
+        
+        # 获取班主任映射
+        head_map = {}
+        if hasattr(self, 'teachers_df') and self.teachers_df is not None:
+            for _, row in self.teachers_df.iterrows():
+                cls = str(row.get('班级', '')).strip()
+                head = str(row.get('班主任', '')).strip()
+                if cls and head:
+                    head_map[cls] = head
+        
         for subject, df in self.subject_details.items():
             grade_row = df[df['班级'] == '年段'].iloc[0] if '年段' in df['班级'].values else None
             if grade_row is None:
@@ -697,7 +849,6 @@ class GradeAnalyzerApp(QMainWindow):
             data['平均分名次'] = data['平均分'].rank(method='min', ascending=False).astype('Int64')
             data['及格率名次'] = data['及格率'].rank(method='min', ascending=False).astype('Int64')
             data['优生率名次'] = data['优生率'].rank(method='min', ascending=False).astype('Int64')
-            data.sort_values('班级', inplace=True)
             cols_order = [
                 '班级', '任课教师',
                 '平均分', '平均分比差', '平均分名次',
@@ -720,6 +871,48 @@ class GradeAnalyzerApp(QMainWindow):
             }
             ranking_df = pd.concat([ranking_df, pd.DataFrame([grade_row_data])], ignore_index=True)
             self.subject_rankings[subject] = ranking_df
+        
+        # 添加总分栏，任课教师为班主任
+        if '总分' in self.subject_details:
+            total_df = self.subject_details['总分']
+            grade_row = total_df[total_df['班级'] == '年段'].iloc[0] if '年段' in total_df['班级'].values else None
+            if grade_row is not None:
+                class_rows = total_df[total_df['班级'] != '年段'].copy()
+                if not class_rows.empty:
+                    data = class_rows[['班级', '平均分', '及格率', '优生率']].copy()
+                    # 添加班主任作为任课教师
+                    data['任课教师'] = data['班级'].map(head_map).fillna('')
+                    grade_avg = grade_row['平均分']
+                    grade_pass = grade_row['及格率']
+                    grade_excel = grade_row['优生率']
+                    data['平均分比差'] = (data['平均分'] - grade_avg) / grade_avg * 10 if grade_avg > 0 else 0
+                    data['及格率比差'] = (data['及格率'] - grade_pass) * 10
+                    data['优生率比差'] = (data['优生率'] - grade_excel) * 10
+                    data['平均分名次'] = data['平均分'].rank(method='min', ascending=False).astype('Int64')
+                    data['及格率名次'] = data['及格率'].rank(method='min', ascending=False).astype('Int64')
+                    data['优生率名次'] = data['优生率'].rank(method='min', ascending=False).astype('Int64')
+                    cols_order = [
+                        '班级', '任课教师',
+                        '平均分', '平均分比差', '平均分名次',
+                        '及格率', '及格率比差', '及格率名次',
+                        '优生率', '优生率比差', '优生率名次'
+                    ]
+                    ranking_df = data[cols_order].copy()
+                    grade_row_data = {
+                        '班级': '年段',
+                        '任课教师': '',
+                        '平均分': grade_avg,
+                        '平均分比差': 0.0,
+                        '平均分名次': pd.NA,
+                        '及格率': grade_pass,
+                        '及格率比差': 0.0,
+                        '及格率名次': pd.NA,
+                        '优生率': grade_excel,
+                        '优生率比差': 0.0,
+                        '优生率名次': pd.NA
+                    }
+                    ranking_df = pd.concat([ranking_df, pd.DataFrame([grade_row_data])], ignore_index=True)
+                    self.subject_rankings['总分'] = ranking_df
     
     def _update_ranking_combobox(self):
         """更新排名科目选择下拉框"""
@@ -735,6 +928,36 @@ class GradeAnalyzerApp(QMainWindow):
             if self.ranking_table:
                 self.ranking_table.setRowCount(0)
                 self.ranking_table.setColumnCount(0)
+    
+    def _sort_classes_numerically(self, classes):
+        """按照班级名称中的数字顺序排序班级"""
+        import re
+        
+        def get_class_number(cls):
+            match = re.search(r'(\d+)', str(cls))
+            if match:
+                return int(match.group(1))
+            return 999999
+        
+        return sorted(classes, key=get_class_number)
+    
+    def _update_class_detail_combobox(self):
+        """更新班级详情下拉框"""
+        if self.student_rank is not None:
+            classes = self._sort_classes_numerically(self.student_rank['班级'].unique())
+            if classes:
+                self.class_detail_combobox.clear()
+                self.class_detail_combobox.addItems(classes)
+                # 始终更新班级详情表格，确保数据的一致性
+                self._on_class_detail_selected(classes[0])
+            else:
+                self.class_detail_combobox.clear()
+                self.class_detail_table.setRowCount(0)
+                self.class_detail_table.setColumnCount(0)
+        else:
+            self.class_detail_combobox.clear()
+            self.class_detail_table.setRowCount(0)
+            self.class_detail_table.setColumnCount(0)
     
     def _on_ranking_subject_selected(self, subject):
         """排名科目选择事件处理
@@ -756,6 +979,57 @@ class GradeAnalyzerApp(QMainWindow):
             subject: 要显示的科目
         """
         update_subject_ranking_table(self, subject)
+    
+    def _on_class_detail_selected(self, class_name):
+        """班级详情选择事件处理
+        
+        Args:
+            class_name: 选择的班级
+        """
+        if class_name:
+            self._update_class_detail_table(class_name)
+        else:
+            self.class_detail_table.setRowCount(0)
+            self.class_detail_table.setColumnCount(0)
+    
+    def _update_class_detail_table(self, class_name):
+        """更新班级详情表格
+        
+        Args:
+            class_name: 要显示的班级
+        """
+        if self.student_rank is None:
+            return
+        
+        # 优化：使用布尔索引过滤数据，避免copy操作
+        class_df = self.student_rank[self.student_rank['班级'] == class_name]
+        
+        if class_df.empty:
+            self.class_detail_table.setRowCount(0)
+            self.class_detail_table.setColumnCount(0)
+            return
+        
+        # 优化：预先获取数据，避免在循环中重复访问
+        rows, cols = class_df.shape
+        columns = list(class_df.columns)
+        data = class_df.values.tolist()
+        
+        # 设置表格行列
+        self.class_detail_table.setRowCount(rows)
+        self.class_detail_table.setColumnCount(cols)
+        
+        # 设置表头
+        self.class_detail_table.setHorizontalHeaderLabels(columns)
+        
+        # 优化：批量填充数据，减少表格操作次数
+        for idx, row_data in enumerate(data):
+            for col_idx, value in enumerate(row_data):
+                if pd.notna(value):
+                    item = QTableWidgetItem(str(value))
+                else:
+                    item = QTableWidgetItem("")
+                item.setTextAlignment(Qt.AlignCenter)
+                self.class_detail_table.setItem(idx, col_idx, item)
     
     def _sync_thresholds_from_left(self):
         """将左侧面板的阈值同步到阈值表格"""
@@ -787,6 +1061,13 @@ class GradeAnalyzerApp(QMainWindow):
             return
         
         try:
+            # 清理之前的教师数据，释放内存
+            self.teachers_df = None
+            
+            # 强制垃圾回收
+            import gc
+            gc.collect()
+            
             df = pd.read_excel(file_path, dtype=str)  # pandas自动选择引擎
             if df.shape[1] < 2:
                 QMessageBox.critical(self, "导入错误", "文件至少需要两列（班级和班主任）")
@@ -802,8 +1083,15 @@ class GradeAnalyzerApp(QMainWindow):
             self.teachers_df = df
             self._refresh_teacher_table()
             QMessageBox.information(self, "导入成功", f"已导入 {len(df)} 个班级的教师配置。")
+            
+            # 再次强制垃圾回收，释放内存
+            gc.collect()
         except Exception as e:
             QMessageBox.critical(self, "导入错误", f"导入失败：{str(e)}")
+            
+            # 发生错误时清理数据，释放内存
+            self.teachers_df = None
+            gc.collect()
     
     def _save_teachers(self):
         """将当前表格数据保存到 self.teachers_df，统一班级格式"""
@@ -817,34 +1105,56 @@ class GradeAnalyzerApp(QMainWindow):
         """
         return fill_teacher_info(self)
     
+    def _open_project_url(self):
+        """打开项目GitHub地址"""
+        import webbrowser
+        webbrowser.open("https://github.com/beiyan124/Simple-Grade-Calculation-System")
+
     def _show_about(self):
         """显示关于对话框"""
         about_text = """年段一分三率计算系统
 
-版本 4.8
+版本 0.6
 
-功能：导入班级成绩Excel，计算平均分、及格率、优秀率，
-并进行班级评比、学生总排位以及单科班级详细排名。
+功能：
+1. 导入Excel成绩文件
+2. 计算学生总分、排名和进退步
+3. 统计班级一分三率（平均分、及格率、优秀率）
+4. 生成单科班级分析和排名
+5. 导入教师信息，支持自动识别班级格式
+6. 导出格式化的Excel结果报表，包含染色功能
 
 新增特性：
-- 增加座号识别与显示
-- 班级汇总表增加总分分数段动态显示
-- 单科班级排名表（含比差和名次）
-- 语数英总分及排名
-- 进退步计算（需导入历史总表）
-- 教师配置功能完整实现（导入、保存、刷新、双击编辑）
-
-使用步骤：
-1. 导入Excel文件（可多选）
-2. （可选）导入历史总表，勾选"启用进退步计算"
-3. 设置各科分数线及参数
-4. 配置教师信息
-5. 点击计算查看结果
-6. 导出汇总Excel
+- 更新配色方案，优化输出表格的染色机制
+- 为班级汇总表分数段添加绿色系染色方案（拿破仑绿、中绿、中浅绿、浅绿、浅浅绿）
+- 优化学生排名表的染色颜色，使层次更加分明（中蓝、浅天蓝、浅蓝、中橙）
+- 为年级排名、班级排名、语数英总分、语数英排名、上次排名、进退步添加不同颜色标识
+- 为输出表格添加冻结窗格功能，提高数据可读性
+- 增加导入教师过程中的兼容性，自动识别班级中的数字并替换为已分班级的文字形式
+- 在单科班级排名的总分一栏添加班主任信息
+- 调整学生排名表的列顺序，将座号放在姓名之前
+- 实现学生排名的染色功能，基于科目阈值的及格线和优秀线
+- 实现用中橙色标记科目最高分的功能
 
 技术支持：Python + PyQt5 + Pandas
+
+作者：beiyan124与Trae,deepseek
 """
         QMessageBox.information(self, "关于", about_text)
+    
+    def _update_progress(self, value: int, message: str = ""):
+        """更新进度条
+        
+        Args:
+            value: 进度值（0-100）
+            message: 进度消息
+        """
+        if self.progress_bar:
+            self.progress_bar.setValue(value)
+        if message:
+            self.statusBar().showMessage(message)
+        # 强制刷新界面
+        QApplication.processEvents()
     
     def resizeEvent(self, event):
         """窗口大小改变事件处理，实现分辨率适配"""

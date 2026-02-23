@@ -20,20 +20,25 @@ def update_student_table(app):
     df = app.student_rank
     table = app.student_table
     
+    # 优化：预先获取数据，避免在循环中重复访问
+    rows, cols = df.shape
+    columns = list(df.columns)
+    data = df.values.tolist()
+    
     # 设置表格行列
-    table.setRowCount(len(df))
-    table.setColumnCount(len(df.columns))
+    table.setRowCount(rows)
+    table.setColumnCount(cols)
     
     # 设置表头
-    table.setHorizontalHeaderLabels(list(df.columns))
+    table.setHorizontalHeaderLabels(columns)
     
-    # 填充数据
-    for idx, (_, row) in enumerate(df.iterrows()):
-        for col_idx, col in enumerate(df.columns):
-            value = row[col]
+    # 优化：批量填充数据，减少表格操作次数
+    for idx, row_data in enumerate(data):
+        for col_idx, value in enumerate(row_data):
+            col_name = columns[col_idx]
             if pd.notna(value):
                 # 检测比差列并显示为百分数形式
-                if '比差' in col:
+                if '比差' in col_name:
                     item = QTableWidgetItem(f"{value:.2f}%")
                 else:
                     item = QTableWidgetItem(str(value))
